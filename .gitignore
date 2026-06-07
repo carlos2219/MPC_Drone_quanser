@@ -1,0 +1,45 @@
+# MATLAB/Simulink Build Artifacts
+slprj/
+@*/
+*.asv
+*.bak
+*.swp
+
+# Simulink Cache & Compilation
+*.slxc
+*.rt-*
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+
+# MATLAB Compiler
+*.mex*
+*.mexw*
+*.mexa64
+*.mexmaci64
+
+# Simulink Test Manager
+*.mldatx
+
+# Code coverage
+*.covdata
+
+# Generated documentation
+html/
+*.html
+
+# Temporary files
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# System files
+.gitattributes
