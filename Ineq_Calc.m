@@ -51,7 +51,8 @@ function [Aineq,G1,G2,G3] = Ineq_Calc(Cc,phi,psi,N,nr,nu,n,y_max,y_min,delmax,de
 % MATHEMATICAL FORM:
 %   The full constraint is: Aineq·u ≤ G1·x[0] + G2·u[-1] + G3
 %   At runtime: G = G1·x[k] + G2·u[k-1] + G3
-%   Then: quadprog minimizes subject to Aineq·u ≤ G
+%   A constrained solver (quadprog / mpcActiveSetSolver) would use Aineq·u ≤ G.
+%   NOTE: built by Setup_QDrone2_MPC but not used by the deployed model.
 %
 % WHY THIS STRUCTURE:
 %   - Affine in u (linear control action) → convex QP
@@ -60,7 +61,7 @@ function [Aineq,G1,G2,G3] = Ineq_Calc(Cc,phi,psi,N,nr,nu,n,y_max,y_min,delmax,de
 %   - Feedback u[-1] term enables smooth rate-limited transitions
 %
 % REFERENCES:
-%   - Boyd & Parikh, "Convex Optimization", § 4.4 (LP/QP with affine constraints)
+%   - Boyd & Vandenberghe, "Convex Optimization", § 4.4 (LP/QP with affine constraints)
 %   - Maciejowski, "Predictive Control with Constraints" (MPC constraint forms)
 
 Aineq_1 = zeros(2*N*nr,N*nu);

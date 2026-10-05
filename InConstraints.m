@@ -45,7 +45,7 @@ function [max_u,min_u] = InConstraints(u_max,u_min,N)
 %             min_u ∈ ℝ^45 (15 copies of 3 negative bounds)
 %
 % WHY NOT BUILD THIS INTO QP SOLVER:
-%   - MATLAB's quadprog expects explicit constraint vector (not index range)
+%   - Constrained QP solvers expect an explicit bound vector (not an index range)
 %   - Horizon-wide vector fits standard QP form: Aineq·u ≤ G
 %   - Simple replication avoids complicated indexing logic
 %

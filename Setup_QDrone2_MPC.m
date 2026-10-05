@@ -31,8 +31,9 @@
 %   Continuous LTI: ẋ = Ax + Bu + Gd
 %   Discretized:    x[k+1] = Ax[k] + Bu[k] + Gd[k]
 %   MPC finite horizon: min Σ J[k] subject to state/input bounds
-%   Quadratic form: min ½u'Hu + F'u subject to Aineq·u ≤ G
-%   Runtime solver: quadprog(H, F, Aineq, G) every Ts seconds
+%   Quadratic form: min ½u'Hu + F'u   (constraints Aineq·u ≤ G built, not active)
+%   Runtime solver: u = -H\F (closed-form, unconstrained) in the Simulink
+%   MPC blocks; actuator/angle limits applied by Saturation blocks after it
 %
 % OUTPUT VARIABLES (loaded to Simulink workspace):
 %   H_z, F1_z, F2_z, F3_z, F4_z, phi_z, psi_z  (altitude layer)
@@ -51,13 +52,12 @@
 %
 % DEPENDENCIES:
 %   MATLAB Control System Toolbox: c2d (discretization)
-%   Optimization Toolbox: quadprog (solver, called at runtime)
 %   Custom functions: Cost_Funct, Ineq_Calc, InConstraints, Pi_i
 %
 % REFERENCES:
 %   System identification: Quanser QDrone2 Technical Manual
 %   MPC formulation: Rawlings & Mayne, "Model Predictive Control"
-%   Implementation: Boyd & Parikh, "Convex Optimization"
+%   QP background: Boyd & Vandenberghe, "Convex Optimization"
 %
 % NOTE:
 %   This script should be run once at startup to populate Simulink
@@ -122,8 +122,8 @@ Jzz = 0.03047;        % kg*m^2
 %   → Reduces computation while maintaining smooth altitude tracking
 %
 % STATE VECTOR: x_z = [z, ż]ᵀ
-%   z: altitude (m), measured from barometer/GPS
-%   ż: vertical velocity (m/s), estimated from barometer derivative
+%   z: altitude (m), from the QDrone 2 height (ToF) sensor / OptiTrack
+%   ż: vertical velocity (m/s), estimated in the DroneStack model
 %
 % CONTROL INPUT: u_z = F_z
 %   F_z: total vertical thrust command to all motors (N)
@@ -285,8 +285,8 @@ delmin_a = [-0.1963;-0.1963;-pi/8];
 %   Decoupled x and y axes (quadrotor symmetry)
 %
 % STATE VECTOR: x_l = [x, ẋ, y, ẏ]ᵀ
-%   x, y: horizontal position (m), measured by GPS
-%   ẋ, ẏ: horizontal velocities (m/s), estimated from GPS derivative
+%   x, y: horizontal position (m), OptiTrack, streamed from Mission Control
+%   ẋ, ẏ: horizontal velocities (m/s), estimated in the DroneStack model
 %
 % CONTROL INPUTS: u_l = [φ_cmd, θ_cmd]ᵀ
 %   Roll and pitch angle COMMANDS to attitude layer (radians)
@@ -309,8 +309,8 @@ delmin_a = [-0.1963;-0.1963;-pi/8];
 %   Small-angle approximation (valid for |φ|, |θ| < π/4):
 %     ẍ ≈ g·φ        (horizontal accel from roll tilt)
 %     ÿ ≈ -g·θ       (horizontal accel from pitch tilt, opposite sign)
-%   This is gravity-driven coupling; strong constraint enforcement prevents
-%   excessive tilts that would violate linearization assumption.
+%   This is gravity-driven coupling; the ±π/4 saturation on the angle
+%   commands keeps tilts inside the linearization's validity range.
 
 N_l = 15;        % Prediction horizon: 15 steps × 0.25s = 3.75s preview
 ts_l = 0.25;     % Sampling time: 4 Hz (synchronized with altitude)

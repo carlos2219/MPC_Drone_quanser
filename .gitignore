@@ -41,5 +41,3 @@ Thumbs.db
 .idea/
 *.sublime-*
 
-# System files
-.gitattributes

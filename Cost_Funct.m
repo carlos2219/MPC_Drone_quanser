@@ -49,13 +49,13 @@ function [H,F1,F2,F3,F4,phi,psi,GMat] = Cost_Funct(A,B,C,G,Qy,Qu,N,c)
 %   GMat   ∈ ℝ^(N·n × nd)      Disturbance propagation matrix (c=1 only)
 %
 % WHY THIS FORM:
-%   - QP solver (quadprog) expects H and F in this standard form
+%   - Standard QP form; the unconstrained minimizer is u* = -H\F (used at runtime)
 %   - Pre-computing H, F avoids repeated matrix operations at each MPC cycle
 %   - Offline computation amortizes cost across many samples
 %   - Finite-horizon formulation tractable (~10-15 horizon steps per layer)
 %
 % REFERENCES:
-%   - Boyd & Parikh, "Convex Optimization", Ch. 4 (QP formulation)
+%   - Boyd & Vandenberghe, "Convex Optimization", Ch. 4 (QP formulation)
 %   - Rawlings & Mayne, "Model Predictive Control" (MPC cost function)
 %   - Franklin & Powell, "Digital Control of Dynamic Systems" (discretization)
 
@@ -105,7 +105,7 @@ if c == 1  % WITH GRAVITY DISTURBANCE (altitude control)
         % Term 1: ‖y[i] - r[i]‖²_Q = ‖C·x[i]‖²_Q
         %         → Ψ_i'C'QC Ψ_i (control-to-error sensitivity)
         % Term 2: ‖u[i]‖²_R (input effort penalty)
-        % Factor 2: MATLAB quadprog convention (½u'Hu → 2u'Hu for direct form)
+        % Factor 2: standard ½u'Hu QP convention (same H works with quadprog)
         H = H + 2*(Psi_i'*C'*Qy*C*Psi_i + (Pi_nu)'*Qu*Pi_nu);
 
         % F1: linear coupling with initial state x[0]

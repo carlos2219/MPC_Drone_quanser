@@ -1,467 +1,112 @@
-# Model Predictive Control for Quanser QDrone2
+# Cascaded MPC Flight Control for the Quanser QDrone 2
 
-## Project Overview
+Three cascaded linear MPC controllers (altitude, attitude, and planar x-y position) running onboard a **Quanser QDrone 2** through QUARC. The controllers are built in MATLAB and Simulink on top of Quanser's QDrone 2 DroneStack, so they reuse its sensing, communication, and motor interfaces.
 
-This project implements a hierarchical **Model Predictive Control (MPC)** system for autonomous flight of a Quanser QDrone2 quadrotor. The system decomposes the full 6-DOF control problem into three cascaded MPC layers: altitude control, attitude control, and planar (x-y) trajectory tracking. Each layer operates at its own prediction and sampling horizon, optimizing over finite prediction windows to compute optimal control sequences subject to physical actuator constraints.
+> Featured in the [Quanser Community Showcase](https://github.com/quanser/Quanser_Academic_Resources/tree/dev-windows/8_user_content/2_research/TecnologicoDeMonterrey_CarlosHernan_QDrone2_CascadedMPC).
 
-## Motivation: MPC over PID and LQR
+## Architecture
 
-### Why MPC?
-
-**PID controllers** are reactive (feedback-only) and struggle with:
-- Actuator saturation and rate constraints
-- Coupled multi-axis dynamics
-- Aggressive setpoint changes requiring extensive tuning
-
-**LQR** solves the infinite-horizon problem optimally but:
-- Assumes unconstrained actuators
-- Does not explicitly handle input/state bounds
-- Cannot enforce physical limits (thrust, torque, angle constraints)
-
-**MPC** combines the strengths of both:
-1. **Explicit constraint handling** — saturations and limits are enforced during optimization, not after
-2. **Finite-horizon optimality** — solves the constrained finite-horizon problem at every sample time
-3. **Decoupling freedom** — layers can operate at different rates (altitude @ 4 Hz, attitude @ 40 Hz, lateral @ 4 Hz)
-4. **Predictive authority** — uses future reference trajectory to anticipate and reduce overshoots
-5. **Natural disturbance rejection** — gravity and model mismatch are explicitly modeled in the cost function
-
-This project prioritizes **robustness to actuator limits and safe operation** over computational efficiency.
-
----
-
-## System Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        QUANSER QDRONE2                            │
-│  6 DOF: x, y, z (position) + roll, pitch, yaw (attitude)         │
-└──────────────────────────────────────────────────────────────────┘
-                                  ↓
-┌──────────────────────────────────────────────────────────────────┐
-│              HIERARCHICAL MPC CONTROL STRUCTURE                   │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                    │
-│  Layer 1: ALTITUDE MPC (N=10, Ts=0.25s)                          │
-│  ├─ Input:  z_cmd (commanded altitude)                           │
-│  ├─ State:  [z, ż]ᵀ (position, velocity)                        │
-│  ├─ Output: thrust_cmd (vertical force)                          │
-│  └─ Constraint: 0 ≤ thrust ≤ 5.11 N                              │
-│                                                                    │
-│  Layer 2: ATTITUDE MPC (N=15, Ts=0.025s)                         │
-│  ├─ Input:  φ_cmd, θ_cmd, ψ_cmd (roll, pitch, yaw setpoints)   │
-│  ├─ State:  [φ, φ̇, θ, θ̇, ψ, ψ̇]ᵀ                                │
-│  ├─ Output: τ_roll, τ_pitch, τ_yaw (torques)                     │
-│  └─ Constraints: |τ| ≤ limits, |angle| ≤ π/4 (roll/pitch)        │
-│                                                                    │
-│  Layer 3: PLANAR MOTION MPC (N=15, Ts=0.25s)                     │
-│  ├─ Input:  x_cmd, y_cmd (planar position references)           │
-│  ├─ State:  [x, ẋ, y, ẏ]ᵀ                                        │
-│  ├─ Output: φ_cmd, θ_cmd (attitude commands to Layer 2)         │
-│  └─ Constraint: |φ|, |θ| ≤ π/4 (tilt angles)                     │
-│                                                                    │
-└──────────────────────────────────────────────────────────────────┘
-                                  ↓
-                        Motor Mixing Matrix
-                    [Ω₁ Ω₂ Ω₃ Ω₄]ᵀ = M⁻¹[Fz τx τy τz]
-                                  ↓
-                    ┌─────────────────────┐
-                    │   Motor Speed Cmds   │
-                    │  to Motor Drivers    │
-                    └─────────────────────┘
+```mermaid
+flowchart LR
+    MC["Mission Control<br/>(ground station)<br/>waypoints + OptiTrack"] -- "x, y, z refs + pose<br/>(QUARC stream)" --> L
+    subgraph D["QDrone 2 onboard (QUARC qdrone2 target)"]
+        L["Planar MPC<br/>x, y → φ_ref, θ_ref<br/>N=15, Ts=0.25 s"] --> A
+        Z["Altitude MPC<br/>z → thrust<br/>N=10, Ts=0.25 s"] --> M
+        A["Attitude MPC<br/>φ, θ, ψ → τx, τy, τz<br/>N=15, Ts=0.025 s"] --> M
+        M["Motor mixing<br/>Motor_Matrix"] --> ESC[ESCs]
+    end
+    MC --> Z
 ```
 
----
+| Layer    | State                | Input                    | Horizon N | Ts      | Preview |
+|----------|----------------------|--------------------------|-----------|---------|---------|
+| Altitude | `[z ż]`              | total thrust             | 10        | 0.25 s  | 2.5 s   |
+| Attitude | `[φ φ̇ θ θ̇ ψ ψ̇]`      | `[τx τy τz]`             | 15        | 0.025 s | 0.375 s |
+| Planar   | `[x ẋ y ẏ]`          | `[φ_ref θ_ref]` → attitude | 15      | 0.25 s  | 3.75 s  |
 
-## MPC Formulation
+The attitude loop runs 10× faster than the outer loops, so each layer can treat the one below it as already settled. The altitude model carries gravity as a known disturbance term (`F4`), so the hover thrust is part of the prediction instead of being left to feedback. The planar layer uses the small-angle model `ẍ ≈ g·φ`, `ÿ ≈ −g·θ`.
 
-### Discrete-Time Linear System Dynamics
+**Sensing:** dual onboard IMU for attitude, the QDrone 2 height sensor, and OptiTrack position streamed from the Mission Control model.
 
-Each layer uses a discretized linear model: **x[k+1] = Ax[k] + Bu[k] + Gd[k]**
+## How the MPC is solved
 
-where:
-- **x[k]** = state vector (position, velocity, angles, angular rates)
-- **u[k]** = control input (force/torque command)
-- **d[k]** = disturbance (gravity, modeling error)
-- **A, B, G** = discretized system matrices (via `c2d`)
-
-#### State Vectors
-
-**Altitude Layer:**
-- x_z = [z, ż]ᵀ — vertical position and velocity
-
-**Attitude Layer:**
-- x_a = [φ, φ̇, θ, θ̇, ψ, ψ̇]ᵀ — Euler angles and angular velocities (decoupled axes)
-
-**Planar Layer:**
-- x_l = [x, ẋ, y, ẏ]ᵀ — horizontal position and velocity (decoupled x and y)
-
-#### Measured Outputs
-
-All three layers measure their respective states directly (full-state feedback). The system assumes:
-- IMU provides φ, θ, ψ, φ̇, θ̇, ψ̇
-- Barometer/GPS provides z, ż, x, ẋ, y, ẏ
-- No filtering or state estimation is implemented (external responsibility)
-
-### Cost Function (Quadratic Programming)
-
-Each MPC layer minimizes:
+Every layer uses the condensed formulation: predict over `N` steps and stack the inputs into `U`, which gives the QP
 
 ```
-J = Σ(k=0 to N-1) [‖y[k] - r[k]‖²_Q + ‖u[k]‖²_R + ‖u[k] - u[k-1]‖²_S]
+min_U  ½ Uᵀ H U + Fᵀ U
 ```
 
-where:
-- **y[k]** = measured output (state subset)
-- **r[k]** = reference output
-- **u[k]** = control input
-- **Q** = output tracking weight (penalizes deviation from reference)
-- **R** = control effort weight (penalizes large actuations)
-- **S** = rate-of-change weight (penalizes jerky inputs)
-- **N** = prediction horizon (10–15 steps per layer)
-
-#### Cost Function Matrices
-
-**Altitude:** 
-- Qy_z = 10 (high altitude tracking priority)
-- Qu_z = 0.00001 (soft thrust saturation)
-
-**Attitude:**
-- Qy_a = diag([2500, 1500, 1500]) (aggressive roll/pitch stabilization)
-- Qu_a = diag([250, 550, 500]) (torque penalization)
-
-**Planar:**
-- Qy_l = diag([100, 500]) (higher priority on y-tracking)
-- Qu_l = diag([300, 800]) (strong input damping)
-
-### Constraints
-
-#### State Constraints (Hard Limits)
-
-**Altitude:**
-- 0 ≤ z ≤ ∞ (implicit: thrust ≥ 0)
-
-**Attitude:**
-- |φ| ≤ π/4 rad (±45°) — roll limit for quadrotor stability
-- |θ| ≤ π/4 rad (±45°) — pitch limit
-- |ψ| ≤ 100°/180°·π rad — yaw rate limit (secondary)
-
-**Planar:**
-- |x|, |y| ≤ ±2 m (workspace limits)
-
-#### Input Constraints (Actuator Saturation)
-
-**Altitude:**
-- 0 ≤ thrust ≤ 5.11 N (motor thrust limit)
-
-**Attitude:**
-- |τ_roll|, |τ_pitch|, |τ_yaw| ≤ computed limits (derived from motor dynamics)
-- Rate constraint: |Δτ| ≤ 0.1963 rad (rate-of-change limit per step)
-
-**Planar:**
-- |φ_cmd|, |θ_cmd| ≤ π/4 rad (commanded angle limits)
-- Rate constraint: |Δφ_cmd|, |Δθ_cmd| ≤ 0.2 rad
-
-### Prediction Horizons and Sampling Rates
-
-| Layer    | Horizon (N) | Sample Time (Ts) | Horizon Duration |
-|----------|-------------|------------------|------------------|
-| Altitude | 10          | 0.25 s           | 2.5 s            |
-| Attitude | 15          | 0.025 s          | 0.375 s          |
-| Planar   | 15          | 0.25 s           | 3.75 s           |
-
-**Design Rationale:**
-- **Altitude** moves slowly (vertical dynamics) → longer horizon, slower sampling
-- **Attitude** must react quickly (angular dynamics, gyro feedback) → short horizon, fast sampling
-- **Planar** moderate speed → intermediate horizon and rate
-
----
-
-## Mathematical Implementation Details
-
-### Cost Function Construction (`Cost_Funct.m`)
-
-The function builds the QP problem: **min ½uᵀHu + Fᵀu**
-
-Outputs:
-- **H** = 2(ΨᵀQΨ + Rₚ) — Hessian (quadratic term, 2× for QP convention)
-- **F** = [F1, F2, F3, F4] — Linear coefficient vectors for constraints
-  - F1: coupling with initial state
-  - F2: coupling with reference trajectory
-  - F3: input penalization
-  - F4: gravity disturbance (altitude only)
-
-where:
-- **Φ** = state transition matrix (powers of A stacked)
-- **Ψ** = input-to-state matrix (Toeplitz with B stacked)
-- **C** = output selection matrix (extracts measured states)
-
-### Constraint Construction (`Ineq_Calc.m`)
-
-Builds inequality constraint matrices **Aineq·u ≤ G** from:
-- Output bounds: y_min ≤ Cy ≤ y_max
-- Input bounds: u_min ≤ u ≤ u_max
-- Input rate bounds: Δu_min ≤ Δu ≤ Δu_max
-
-Expands bounds across the prediction horizon (N copies of constraints).
-
-### Input Constraint Expansion (`InConstraints.m`)
-
-Simple helper that replicates a single constraint vector N times to create the horizon-wide constraint vector:
-```
-[u_max; u_max; ...; u_max]  (N copies)
-```
-
-### Motor Mixing (`Motor_Mapping_7_Inch.m`)
-
-Inverse kinematics: desired thrust and torques → motor RPM commands
-
-The motor matrix **M** maps:
-```
-[F_total]     [Ω₁]
-[τ_roll  ]  = M [Ω₂]
-[τ_pitch ] ·   [Ω₃]
-[τ_yaw   ]     [Ω₄]
-```
-
-Geometry parameters (7-inch props):
-- **L_Roll** = 254 mm (roll moment arm)
-- **L_Pitch** = 203.2 mm (pitch moment arm)
-- **K_Tau** = 68.9055 (yaw moment scaling)
-
-### Reference Tracking Helper (`Pi_i.m`)
-
-Selects the k-th state variable across the prediction horizon:
-```
-Pi_i(i, nx, N) ∈ ℝ^(nx × N·nx) — picks state i from stacked vector
-```
-Used to decouple tracking error calculation per timestep.
-
----
-
-## System Parameters
-
-### Drone Physical Properties
-
-| Parameter | Value | Unit | Description |
-|-----------|-------|------|-------------|
-| m | 1.504 | kg | Total mass (QDrone2) |
-| g | 9.81 | m/s² | Gravity |
-| Jxx | 0.01277 | kg·m² | Roll inertia |
-| Jyy | 0.01337 | kg·m² | Pitch inertia |
-| Jzz | 0.03047 | kg·m² | Yaw inertia |
-
-### Motor / Actuator Properties
-
-| Parameter | Value | Unit | Description |
-|-----------|-------|------|-------------|
-| Kv | 2100 | RPM/V | Motor speed constant |
-| Kt | 1/Kv | — | Motor torque constant |
-| Tmax | 5.11 | N | Max thrust per motor |
-| Imax | 5.82 | A | Max motor current |
-| Tm | 0.04 | s | Motor time constant (actuation delay model) |
-
-### Geometric Parameters
-
-| Parameter | Value | Unit | Description |
-|-----------|-------|------|-------------|
-| L_Roll | 254 | mm | Motor-to-motor distance (roll axis) |
-| L_Pitch | 203.2 | mm | Motor-to-motor distance (pitch axis) |
-| mRotor | 0.045 | kg | Mass of rotor + motor assembly |
-
----
-
-## Dependencies
-
-### Required MATLAB Toolboxes
-- **Control System Toolbox** — `c2d` (continuous-to-discrete conversion)
-- **Optimization Toolbox** — quadprog (QP solver)
-- **Simulink** (if using Simulink models for real-time control)
-
-### Hardware Interface
-- **Quanser QDrone2** — quadrotor with onboard motor drivers and IMU
-- **QUARC Real-Time Linux** — real-time environment for deterministic control loop
-- **Joystick Interface** — for manual trajectory commands
-
-### External Modules (if applicable)
-- Sensor drivers (IMU, barometer, GPS)
-- Motor driver firmware
-- State estimator (Kalman filter, complementary filter)
-
----
-
-## How to Run
-
-### 1. Setup Environment
+`H` depends only on the model and the weights, so `Setup_QDrone2_MPC.m` computes it **offline**. Online, the model only assembles `F` from the current state, the reference, and (for altitude) gravity, and then solves the problem in closed form:
 
 ```matlab
-% Open MATLAB in the project directory
-cd /path/to/MPC_Drone_quanser
-
-% Run setup script to initialize all MPC parameters
-Setup_QDrone2_MPC
+y = (-H)\F;     % MATLAB Function block in each MPC layer
 ```
 
-This script:
-- Loads drone physical parameters (mass, inertia, motor constants)
-- Discretizes continuous-time models for each layer
-- Constructs cost function matrices (H, F1, F2, F3, F4)
-- Constructs constraint matrices (Aineq, G1, G2, G3)
-- Initializes motor mixing matrix
-- Computes prediction horizons and sampling rates
+The first move is applied (receding horizon), and **Saturation blocks** clamp thrust, torques, and angle commands to the hardware limits.
 
-### 2. Load Simulink Model (Real-Time Control)
+This is a deliberate trade-off. There is no iterative solver, so the solve time is deterministic and small: a 10×10, 45×45, or 30×30 linear system per step. That keeps the code generation for the QDrone 2 target simple. The cost is that the limits are applied *after* the optimization rather than *inside* it.
 
-```matlab
-% Load the main control stack
-load_system('QD2_DroneStack_CompleteMPC_2021a.slx')
+### Constrained version (prepared, not active)
 
-% Compile and connect to QUARC hardware
-rtwbuild('QD2_DroneStack_CompleteMPC_2021a')
+The constrained QP is already formulated in the repository:
 
-% Run in real-time on the drone
-```
+- `Ineq_Calc.m` builds `Aineq·U ≤ G1·x + G3` for the output (angle and position) bounds.
+- `InConstraints.m` builds the input bounds over the whole horizon.
+- The MPC blocks contain commented-out `quadprog` and `mpcActiveSetSolver` calls.
 
-The Simulink model implements:
-- Three MPC blocks (altitude, attitude, planar) running asynchronously
-- State feedback from sensors
-- Reference trajectory input (from joystick or waypoint planner)
-- Motor command output to ESC drivers
+To make it active, feed `Aineq` and `G1·x + G3` into the solver blocks, switch them to `mpcActiveSetSolver` (which supports code generation), and compare limit violations and solve time against the closed-form version. Contributions are welcome.
 
-### 3. Command the Drone
+## Repository contents
 
-#### Manual Control (Joystick)
-```matlab
-% Connect joystick input
-% Sticks control: roll, pitch desired angles → planar MPC
-%                 throttle → altitude MPC  
-%                 yaw → yaw rate command
-```
+| File | Purpose |
+|------|---------|
+| `Setup_QDrone2_MPC.m` | Parameters, models, weights, horizons; builds `H`, `F*`, constraint matrices and `Motor_Matrix`. **Run first.** |
+| `Cost_Funct.m` | Condensed MPC matrices `H`, `F1..F4`, prediction matrices `Φ`, `Ψ`. |
+| `Ineq_Calc.m`, `InConstraints.m` | Inequality / bound matrices for a constrained solver. |
+| `Pi_i.m` | Selector for step *i* in a stacked horizon vector. |
+| `Motor_Mapping_7_Inch.m` | Thrust/torque → per-motor command mixing matrix. |
+| `QD2_DroneStack_CompleteMPC_2021a.slx` | Onboard model (QUARC `quarc_linux_qdrone2` target): the three MPC layers, saturations, sensing, motors. |
+| `QD2_MissionCtrl.slx` | Ground-station Mission Control (joystick / OptiTrack, streams references and pose to the drone). |
+| `QD2_MissionCtrl_PipeWaypoints.slx` | Mission Control variant that sequences the drone through a predefined waypoint list. |
 
-#### Autonomous Trajectory
-```matlab
-% Program waypoint references into the Simulink model
-% MPC automatically tracks the reference with optimal inputs
-```
+## Running it
 
-### 4. Monitor Performance
+Requirements: MATLAB and Simulink (the models were saved in R2022a), the Control System Toolbox (`c2d`), QUARC with QDrone 2 support, and an OptiTrack setup for x-y position.
 
-- **Real-time plotting**: Position, velocity, angles, rates
-- **Constraint violation detection**: Check if any limits are exceeded
-- **Energy consumption**: Sum of motor commands over time
-- **Computation time**: Monitor QP solver runtime per cycle
+1. Run `Setup_QDrone2_MPC` in MATLAB. It puts all the MPC matrices in the base workspace.
+2. Open `QD2_DroneStack_CompleteMPC_2021a.slx`, then build and deploy it to the QDrone 2 with QUARC.
+3. On the ground station, open `QD2_MissionCtrl.slx` (or the waypoint variant) and check that the IP addresses in the stream blocks match your network. Run it with QUARC and arm the drone.
 
----
+To retune a layer, edit `Qy_*`, `Qu_*`, `N_*`, or `ts_*` in `Setup_QDrone2_MPC.m`. Then re-run the script and rebuild the model.
 
-## Results and Demo
+## Ideas to extend
 
-### Expected Behavior
-
-✅ **Altitude Tracking**
-- Setpoint changes tracked with minimal overshoot (< 10%)
-- Smooth transition via MPC predictive authority
-- Thrust command remains within [0, 5.11N]
-
-✅ **Attitude Stabilization**
-- Roll/pitch held within ±45° during aggressive maneuvers
-- Yaw angle controlled independently
-- Angular rates damped (no oscillations)
-
-✅ **Planar Trajectory Tracking**
-- x-y position follows reference with ~0.1 m steady-state error
-- Velocity outputs smooth; minimal jerk
-- Attitude commands from planar MPC remain saturated within limits
-
-✅ **Constraint Satisfaction**
-- All state and input constraints honored throughout flight
-- Graceful saturation prevents unstable control commands
-- Rate limiters prevent actuator chattering
-
-### Performance Metrics
-
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| Altitude RMSE | < 0.2 m | — |
-| Planar position RMSE | < 0.15 m | — |
-| Attitude overshoot | < 15% | — |
-| QP solve time (per cycle) | < 5 ms | — |
-| Constraint violations | 0 | — |
-
-*Placeholders for empirical results from flight test.*
-
-### Flight Test Videos / Data
-
-- **Video 1**: Hovering altitude hold with 0.5 m step input
-- **Video 2**: Figure-8 trajectory in x-y plane
-- **Video 3**: Aggressive yaw maneuver with roll/pitch stabilization
-- **Data 1**: Logged telemetry (position, velocity, attitudes, motor commands)
-
-*To be populated with actual flight test results.*
-
----
-
-## Code Structure
-
-```
-MPC_Drone_quanser/
-├── README.md                              # This file
-├── ARCHITECTURE.md                        # Control loop diagram and block structure
-├── Setup_QDrone2_MPC.m                    # Main initialization script
-├── Cost_Funct.m                           # MPC cost function construction
-├── Ineq_Calc.m                            # Constraint matrix assembly
-├── InConstraints.m                        # Horizon-wise constraint expansion
-├── Pi_i.m                                 # State selection helper
-├── Motor_Mapping_7_Inch.m                 # Inverse kinematics (thrust/torque → RPM)
-├── QD2_DroneStack_CompleteMPC_2021a.slx   # Main Simulink control model
-├── QD2_MissionCtrl_Pipas1.slx             # Mission planner variant 1
-├── QD2_MissionCtrl_Pipas2.slx             # Mission planner variant 2
-└── LICENSE                                # License information
-```
-
----
-
-## Extending the Controller
-
-### Adding a Waypoint Planner
-Modify reference input r[k] to step through GPS waypoints with smooth interpolation.
-
-### Implementing Disturbance Rejection
-Add wind model to cost function (state-dependent disturbance) or implement Kalman filter to estimate persistent biases.
-
-### Tuning MPC Weights
-Adjust **Qy** (output weight) and **Qu** (input weight) in `Setup_QDrone2_MPC.m`:
-- Higher Qy → tighter tracking (faster, more oscillatory)
-- Higher Qu → smoother inputs (slower, larger overshoot)
-
-### Reconfiguring Horizons
-Modify **N** (prediction horizon) and **Ts** (sampling time) per layer:
-- Longer N → better preview, higher compute cost
-- Shorter Ts → faster response, but requires better sensors and actuators
-
----
-
-## References
-
-- **MPC Theory**: Boyd & Parikh, "Convex Optimization" (constrained QP)
-- **Quadrotor Dynamics**: Beard & McLain, "Small Unmanned Aircraft: Theory and Practice"
-- **Quanser Documentation**: QDrone2 Hardware Manual & Control Architecture Guide
-- **Discrete Control**: Franklin, Powell, Workman, "Digital Control of Dynamic Systems"
-
----
+- Activate the constrained QP (see above) and measure violations and solve time.
+- Swap one layer for the stock DroneStack PID and compare tracking error and motor effort on the same trajectory.
+- Sweep horizon length versus tracking performance and compute time.
+- Replace the step changes between waypoints with smooth reference trajectories, so the planar MPC can use its 3.75 s of preview.
 
 ## Authors
 
-- **Control Design**: [Your Name / Team]
-- **Implementation**: Simulink + MATLAB MPC
-- **Hardware Platform**: Quanser QDrone2
-- **Institution**: ITESM (Instituto Tecnológico y de Estudios Superiores de Monterrey)
+- **Carlos Auquilla**: design and implementation
+- **David Sotelo**: advisor
+- **Carlos Sotelo**: advisor
+- **Luis Muñoz**: advisor
 
----
+Tecnológico de Monterrey. Built on Quanser's QDrone 2 DroneStack models.
+
+Questions, bugs, and contributions: please open a [GitHub Issue](https://github.com/carlos2219/MPC_Drone_quanser/issues).
+
+If you use this work, see `CITATION.cff` (GitHub's *Cite this repository* button).
+
+## References
+
+- J. B. Rawlings, D. Q. Mayne, M. M. Diehl, *Model Predictive Control: Theory, Computation, and Design*, 2nd ed., Nob Hill, 2017.
+- F. Borrelli, A. Bemporad, M. Morari, *Predictive Control for Linear and Hybrid Systems*, Cambridge University Press, 2017.
+- S. Boyd, L. Vandenberghe, *Convex Optimization*, Cambridge University Press, 2004.
+- R. W. Beard, T. W. McLain, *Small Unmanned Aircraft: Theory and Practice*, Princeton University Press, 2012.
+- Quanser, QDrone 2 documentation and DroneStack resources: [Quanser Academic Resources](https://github.com/quanser/Quanser_Academic_Resources).
 
 ## License
 
-See `LICENSE` file.
-
----
-
-**Last Updated**: June 6, 2026
-
+MIT. See `LICENSE`.

@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Cascaded MPC Flight Control for the Quanser QDrone 2"
+type: software
+authors:
+  - given-names: Carlos
+    family-names: Auquilla
+    affiliation: "Tecnológico de Monterrey"
+  - given-names: David
+    family-names: Sotelo
+    affiliation: "Tecnológico de Monterrey"
+  - given-names: Carlos
+    family-names: Sotelo
+    affiliation: "Tecnológico de Monterrey"
+  - given-names: Luis
+    family-names: Muñoz
+    affiliation: "Tecnológico de Monterrey"
+repository-code: "https://github.com/carlos2219/MPC_Drone_quanser"
+license: MIT
+version: 1.0.0
+date-released: 2026-10-05
+keywords:
+  - model predictive control
+  - quadrotor
+  - Quanser QDrone 2
+  - Simulink
+  - QUARC
