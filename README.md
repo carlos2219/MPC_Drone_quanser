@@ -4,10 +4,17 @@ Three cascaded linear MPC controllers (altitude, attitude, and planar x-y positi
 
 > Featured in the [Quanser Community Showcase](https://github.com/quanser/Quanser_Academic_Resources/tree/dev-windows/8_user_content/2_research/TecnologicoDeMonterrey_CarlosHernan_QDrone2_CascadedMPC).
 
+## System demo
+
+[![QDrone 2 system demo: cascaded MPC flight with ROS waypoints and onboard vision](media/Qdrone_Demo_thumbnail.png)](https://youtu.be/1BrCoDct_zU)
+
+*[Watch on YouTube](https://youtu.be/1BrCoDct_zU).* The cascaded MPC in this repository is the flight-control layer of a larger QDrone 2 application. In that application, ROS publishes waypoints to Mission Control and the drone streams onboard vision. This repository contains the control stack; the ROS and vision components are not included.
+
 ## Architecture
 
 ```mermaid
 flowchart LR
+    ROS["ROS<br/>(waypoints)"] -.-> MC
     MC["Mission Control<br/>(ground station)<br/>waypoints + OptiTrack"] -- "x, y, z refs + pose<br/>(QUARC stream)" --> L
     subgraph D["QDrone 2 onboard (QUARC qdrone2 target)"]
         L["Planar MPC<br/>x, y → φ_ref, θ_ref<br/>N=15, Ts=0.25 s"] --> A
@@ -88,10 +95,11 @@ To retune a layer, edit `Qy_*`, `Qu_*`, `N_*`, or `ts_*` in `Setup_QDrone2_MPC.m
 
 ## Authors
 
-- **Carlos Auquilla**: design and implementation
-- **David Sotelo**: advisor
-- **Carlos Sotelo**: advisor
-- **Luis Muñoz**: advisor
+**Carlos Auquilla**, lead author and team lead: MPC design, implementation, integration, and documentation.
+
+**Advisors:** David Sotelo, Carlos Sotelo, Luis Muñoz.
+
+**Contributors:** Fernando Estrada, Ismael de León, Samantha López, Genaro Rivero.
 
 Tecnológico de Monterrey. Built on Quanser's QDrone 2 DroneStack models.
 
