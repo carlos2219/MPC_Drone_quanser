@@ -95,7 +95,7 @@ To retune a layer, edit `Qy_*`, `Qu_*`, `N_*`, or `ts_*` in `Setup_QDrone2_MPC.m
 
 ## Authors
 
-**Carlos Auquilla**, lead author and team lead: MPC design, implementation, integration, and documentation.
+**Carlos Auquilla**, lead author and team lead: MPC implementation, integration, and documentation.
 
 **Advisors:** David Sotelo, Carlos Sotelo, Luis Muñoz.
 
@@ -103,7 +103,7 @@ To retune a layer, edit `Qy_*`, `Qu_*`, `N_*`, or `ts_*` in `Setup_QDrone2_MPC.m
 
 Tecnológico de Monterrey. Built on Quanser's QDrone 2 DroneStack models.
 
-Questions, bugs, and contributions: please open a [GitHub Issue](https://github.com/carlos2219/MPC_Drone_quanser/issues).
+Questions, bugs, and contributions: open a [GitHub Issue](https://github.com/carlos2219/MPC_Drone_quanser/issues) or email [carlosauquillal@gmail.com](mailto:carlosauquillal@gmail.com).
 
 If you use this work, see `CITATION.cff` (GitHub's *Cite this repository* button).
 
